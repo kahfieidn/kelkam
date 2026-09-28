@@ -35,6 +35,7 @@
  */
 
 import type { NextConfig } from "next";
+import path from "path";
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -95,6 +96,8 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   /** Build sebagai standalone → .next/standalone/ siap di-deploy ke JKC. */
   output: "standalone",
+  /** Memastikan root tracing selalu di folder proyek ini (menghindari nesting .next/standalone) */
+  outputFileTracingRoot: path.join(__dirname),
   /** Hilangkan header "X-Powered-By: Next.js" (info disclosure). */
   poweredByHeader: false,
   /** Pasang security headers di semua response. */
