@@ -132,17 +132,17 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
           
           # Konfigurasi lftp:
-          # - open eksplisit dengan user dan password
-          # - verify-certificate no: menerima sertifikat SSL cPanel
-          # - ssl-allow yes: mendukung baik FTP standar maupun FTPS
-          # - parallel 4: multi-connection transfer yang stabil
-          lftp <<EOF
+          # - mode debug (-d): menampilkan respons kode FTP lengkap (230, 331, 530 dll)
+          # - ssl-protect-data false: mencegah hang pada passive data channel cPanel
+          # - ssl-force false: fleksibel jika server cPanel menggunakan FTP biasa atau FTPS
+          lftp -d <<EOF
           set ssl:verify-certificate no
           set ftp:ssl-allow yes
-          set ftp:ssl-protect-data yes
+          set ftp:ssl-force false
+          set ftp:ssl-protect-data false
           set ftp:passive-mode true
-          set net:max-retries 3
-          set net:timeout 30
+          set net:max-retries 2
+          set net:timeout 25
           open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
           mirror --reverse --delete --parallel=4 --verbose ./deploy/ "$FTP_SERVER_DIR"
           bye
