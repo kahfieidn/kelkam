@@ -1,4 +1,4 @@
-name: Deploy Next.js to cPanel (FTP Standalone)
+name: Deploy Next.js to cPanel (FTP Standalone Only)
 
 on:
   push:
