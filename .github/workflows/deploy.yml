@@ -110,19 +110,40 @@ jobs:
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_SERVER_DIR: ${{ secrets.FTP_SERVER_DIR || '/' }}
         run: |
+          # 1. Validasi secret
+          if [ -z "$FTP_SERVER" ]; then
+            echo "::error::Secret FTP_SERVER kosong! Pastikan sudah menambahkan FTP_SERVER di GitHub Repository Secrets."
+            exit 1
+          fi
+          if [ -z "$FTP_USERNAME" ]; then
+            echo "::error::Secret FTP_USERNAME kosong! Pastikan sudah menambahkan FTP_USERNAME di GitHub Repository Secrets."
+            exit 1
+          fi
+          if [ -z "$FTP_PASSWORD" ]; then
+            echo "::error::Secret FTP_PASSWORD kosong! Pastikan sudah menambahkan FTP_PASSWORD di GitHub Repository Secrets."
+            exit 1
+          fi
+
+          echo "Target Server: $FTP_SERVER"
+          echo "Target User  : $FTP_USERNAME"
+          echo "Target Dir   : $FTP_SERVER_DIR"
+
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
           
           # Konfigurasi lftp:
-          # - parallel 6: upload 6 file sekaligus (jauh lebih cepat daripada FTP biasa)
-          # - delete: hapus file lama/chunk usang Next.js agar disk cPanel hemat
-          # - ssl-allow yes & verify-certificate no: kompatibel dengan FTP biasa maupun FTPS self-signed cPanel
-          lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER" <<EOF
+          # - open eksplisit dengan user dan password
+          # - verify-certificate no: menerima sertifikat SSL cPanel
+          # - ssl-allow yes: mendukung baik FTP standar maupun FTPS
+          # - parallel 4: multi-connection transfer yang stabil
+          lftp <<EOF
           set ssl:verify-certificate no
           set ftp:ssl-allow yes
+          set ftp:ssl-protect-data yes
           set ftp:passive-mode true
           set net:max-retries 3
           set net:timeout 30
-          mirror --reverse --delete --parallel=6 --verbose ./deploy/ "$FTP_SERVER_DIR"
+          open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
+          mirror --reverse --delete --parallel=4 --verbose ./deploy/ "$FTP_SERVER_DIR"
           bye
           EOF
 
