@@ -20,6 +20,17 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
+      - name: 🌐 Ambil Info IP Runner GitHub
+        run: |
+          RUNNER_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          echo "=========================================================="
+          echo "🌐 IP Runner GitHub Actions saat ini: $RUNNER_IP"
+          echo "Command Whitelist di server CSF: csf -a $RUNNER_IP GitHub-Actions"
+          echo "=========================================================="
+          echo "### 🌐 GitHub Runner IP: \`$RUNNER_IP\`" >> $GITHUB_STEP_SUMMARY
+          echo "> 💡 Jika firewall memblokir, jalankan di server: \`csf -a $RUNNER_IP GitHub-Actions\`" >> $GITHUB_STEP_SUMMARY
+
       - name: ⚙️ Setup Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -130,12 +141,26 @@ jobs:
 
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
           
-          # Konfigurasi lftp anti-firewall ban:
-          # - connection-limit 1: hanya 1 koneksi aktif dalam satu waktu (mencegah CSF CT_LIMIT ban)
-          # - sync-mode on: tunggu respons sebelum kirim perintah berikutnya (mencegah CSF PORTFLOOD)
-          # - ssl-allow no: plain FTP agar passthrough NAT firewall lancar
-          # - mirror tanpa parallel: upload sekuensial agar tidak memicu deteksi serangan port-scan
-          lftp -d <<EOF
+          # Konfigurasi lftp anti-firewall ban & log bersih:
+          # - Hapus flag '-d' agar tidak membanjiri log dengan raw FTP debug
+          # - net:timeout 60: beri waktu cukup untuk file binary besar (.prisma/client)
+          # - format output dengan emoji: ✅ Upload, 🗑️ Hapus, 📁 Folder
+          set -o pipefail
+          lftp <<EOF 2>&1 | while IFS= read -r line; do
+            if [[ "$line" =~ Transferring\ file\ [\'\`]?(.*)[\'\`]? ]]; then
+              echo "  ✅ Upload : ${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ Removing\ old\ file\ [\'\`]?(.*)[\'\`]? ]]; then
+              echo "  🗑️ Hapus  : ${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ Making\ directory\ [\'\`]?(.*)[\'\`]? ]]; then
+              echo "  📁 Folder : ${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ (Fatal|error|Error|Timeout|failed) ]]; then
+              echo "  ⚠️ $line"
+            elif [[ "$line" =~ bytes\ per\ second|Transferring|Removing ]]; then
+              : # abaikan baris statistik detail
+            else
+              echo "  ℹ️ $line"
+            fi
+          done
           set ssl:verify-certificate no
           set ftp:ssl-allow no
           set ftp:passive-mode true
@@ -143,10 +168,11 @@ jobs:
           set ftp:prefer-epsv no
           set ftp:sync-mode on
           set net:connection-limit 1
-          set net:max-retries 3
-          set net:timeout 30
+          set net:max-retries 5
+          set net:timeout 60
+          set net:reconnect-interval-base 3
           open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
-          mirror --reverse --delete --verbose ./deploy/ "$FTP_SERVER_DIR"
+          mirror --reverse --delete --verbose=1 ./deploy/ "$FTP_SERVER_DIR"
           bye
           EOF
 
