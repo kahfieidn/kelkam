@@ -146,47 +146,32 @@ jobs:
           # - net:timeout 60: beri waktu cukup untuk file binary besar (.prisma/client)
           # - format output dengan emoji: ✅ Upload, 🗑️ Hapus, 📁 Folder
           # 1. Tulis konfigurasi & perintah lftp ke file sementara
-          cat << EOF > /tmp/lftp_script.txt
-          set ssl:verify-certificate no
-          set ftp:ssl-allow no
-          set ftp:passive-mode true
-          set ftp:use-pret no
-          set ftp:prefer-epsv no
-          set ftp:sync-mode on
-          set net:connection-limit 1
-          set net:max-retries 5
-          set net:timeout 60
-          set net:reconnect-interval-base 3
-          open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
-          mirror --reverse --delete --verbose=1 ./deploy/ "$FTP_SERVER_DIR"
-          bye
-EOF
+          {
+            echo "set ssl:verify-certificate no"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode true"
+            echo "set ftp:use-pret no"
+            echo "set ftp:prefer-epsv no"
+            echo "set ftp:sync-mode on"
+            echo "set net:connection-limit 1"
+            echo "set net:max-retries 5"
+            echo "set net:timeout 60"
+            echo "set net:reconnect-interval-base 3"
+            echo "open -u \"$FTP_USERNAME\",\"$FTP_PASSWORD\" \"$FTP_SERVER\""
+            echo "mirror --reverse --delete --verbose=1 ./deploy/ \"$FTP_SERVER_DIR\""
+            echo "bye"
+          } > /tmp/lftp_script.txt
 
-          # 2. Jalankan lftp dan rapikan log menggunakan Python
+          # 2. Jalankan lftp dan rapikan log output
           set -o pipefail
-          lftp -f /tmp/lftp_script.txt 2>&1 | python3 -u -c '
-import sys, re
-
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    if line.startswith("Transferring file "):
-        path = re.sub(r"^Transferring file [\x27\x60]?(.*?)[\x27\x60]?$", r"\1", line)
-        print(f"  ✅ Upload : {path}", flush=True)
-    elif line.startswith("Removing old file "):
-        path = re.sub(r"^Removing old file [\x27\x60]?(.*?)[\x27\x60]?$", r"\1", line)
-        print(f"  🗑️ Hapus  : {path}", flush=True)
-    elif line.startswith("Making directory "):
-        path = re.sub(r"^Making directory [\x27\x60]?(.*?)[\x27\x60]?$", r"\1", line)
-        print(f"  📁 Folder : {path}", flush=True)
-    elif any(err in line for err in ["Fatal", "error", "Error", "Timeout", "failed"]):
-        print(f"  ⚠️ {line}", flush=True)
-    elif "bytes per second" in line or "measured here" in line:
-        pass
-    else:
-        print(f"  ℹ️ {line}", flush=True)
-'
+          lftp -f /tmp/lftp_script.txt 2>&1 \
+            | sed -E \
+                -e "s/^Transferring file '(.*)'$/  ✅ Upload : \1/" \
+                -e "s/^Removing old file '(.*)'$/  🗑️ Hapus  : \1/" \
+                -e "s/^Making directory '(.*)'$/  📁 Folder : \1/" \
+                -e "/bytes per second/d" \
+                -e "/measured here/d" \
+                -e "/File successfully transferred/d"
 
       - name: 🔔 Deploy Summary
         if: always()
