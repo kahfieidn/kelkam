@@ -1,4 +1,4 @@
-name: Deploy to cPanel FTP Fix
+name: Deploy Next.js to cPanel (FTP Standalone)
 
 on:
   push:
@@ -6,48 +6,153 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
-  group: fastdigitop-production
+  group: deploy-production
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    name: Deploy via FTP
+  build-and-deploy:
+    name: Build & Deploy via FTP
     runs-on: ubuntu-latest
     environment: FTP_SERVER
 
     steps:
-      - name: Checkout repository
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup PHP 8.2
-        uses: shivammathur/setup-php@v2
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
         with:
-          php-version: "8.2"
+          node-version: "20"
+          cache: "npm"
 
-      - name: Lint PHP files
-        run: find . -type f -name "*.php" -print0 | xargs -0 -n1 php -l
+      - name: 📦 Install dependencies
+        run: npm ci --no-audit --no-fund
 
-      - name: 📂 Sync files to cPanel via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER || secrets.CPANEL_HOST || secrets.FTP_HOST }}
-          username: ${{ secrets.FTP_USERNAME || secrets.CPANEL_USER || secrets.FTP_USER }}
-          password: ${{ secrets.FTP_PASSWORD || secrets.CPANEL_PASSWORD }}
-          port: ${{ secrets.FTP_PORT || secrets.CPANEL_PORT || 21 }}
-          protocol: ${{ secrets.FTP_PROTOCOL || 'ftp' }}
-          server-dir: ${{ secrets.FTP_SERVER_DIR || 'public_html/' }}
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/.github/**
-            .gitignore
-            .env.example
-            .env
-            .DS_Store
-            Thumbs.db
+      - name: 🗄️ Generate Prisma Client
+        run: npx prisma generate
+
+      - name: 🚀 Apply Database Migrations (Opsional)
+        if: env.DATABASE_URL != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          echo "Menjalankan migrasi database jika koneksi tersedia..."
+          npx prisma migrate deploy --schema prisma/schema.prisma || echo "::warning::Migrasi dilewati atau gagal terhubung ke database."
+
+      - name: 🏗️ Build Next.js (Standalone Mode)
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_MODEL_FAST: ${{ secrets.AI_MODEL_FAST }}
+          AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
+        run: npm run build
+
+      - name: 📁 Prepare Deployment Directory
+        run: |
+          echo "Menyiapkan direktori deploy..."
+          rm -rf deploy
+          mkdir -p deploy/.next/standalone/.next
+          mkdir -p deploy/tmp
+
+          # 1. Salin seluruh isi .next/standalone ke struktur deploy/.next/standalone
+          cp -r .next/standalone/. deploy/.next/standalone/
+
+          # 2. Salin .next/static ke .next/standalone/.next/static (Wajib untuk Next.js standalone)
+          cp -r .next/static deploy/.next/standalone/.next/
+
+          # 3. Salin folder public ke .next/standalone/public (Wajib untuk Next.js standalone)
+          cp -r public deploy/.next/standalone/
+
+          # 4. Trigger auto-restart cPanel (Phusion Passenger me-restart app jika tmp/restart.txt diubah)
+          touch deploy/tmp/restart.txt
+
+          # 5. Salin folder prisma untuk runtime schema
+          if [ -d "prisma" ]; then
+            cp -r prisma deploy/
+          fi
+
+          # 6. Buat file root server.js sebagai startup loader cPanel
+          cat << 'EOF' > deploy/server.js
+          // Startup file jika cPanel Application Startup File diset ke server.js
+          require('./.next/standalone/server.js');
+          EOF
+
+          # 7. Generate file .env di server untuk runtime production
+          cat << EOF > deploy/.env
+          NODE_ENV=production
+          PORT=3000
+          HOSTNAME=0.0.0.0
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          DIRECT_URL=${{ secrets.DIRECT_URL }}
+          AUTH_JWT_SECRET=${{ secrets.AUTH_JWT_SECRET }}
+          NEXT_PUBLIC_SITE_URL=${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
+          AI_API_KEY=${{ secrets.AI_API_KEY }}
+          AI_BASE_URL=${{ secrets.AI_BASE_URL }}
+          AI_MODEL=${{ secrets.AI_MODEL }}
+          AI_MODEL_FAST=${{ secrets.AI_MODEL_FAST }}
+          AI_MODEL_REVIEW=${{ secrets.AI_MODEL_REVIEW }}
+          EOF
+
+          echo "Pemeriksaan direktori deploy:"
+          ls -la deploy
+          echo "Pemeriksaan direktori .next di dalam deploy:"
+          ls -la deploy/.next/standalone/.next
+
+      - name: 📤 Deploy via FTP (lftp mirror)
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER || secrets.CPANEL_HOST || secrets.FTP_HOST || vars.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME || secrets.CPANEL_USER || secrets.FTP_USER || vars.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD || secrets.CPANEL_PASSWORD || vars.FTP_PASSWORD }}
+          FTP_SERVER_DIR: ${{ secrets.FTP_SERVER_DIR || vars.FTP_SERVER_DIR || '/' }}
+        run: |
+          if [ -z "$FTP_SERVER" ]; then
+            echo "::error::FTP_SERVER kosong! Pastikan secret/variable FTP_SERVER telah diisi."
+            exit 1
+          fi
+          if [ -z "$FTP_USERNAME" ]; then
+            echo "::error::FTP_USERNAME kosong! Pastikan secret/variable FTP_USERNAME telah diisi."
+            exit 1
+          fi
+          if [ -z "$FTP_PASSWORD" ]; then
+            echo "::error::FTP_PASSWORD kosong! Pastikan secret/variable FTP_PASSWORD telah diisi."
+            exit 1
+          fi
+
+          echo "Target Server: $FTP_SERVER"
+          echo "Target User  : $FTP_USERNAME"
+          echo "Target Dir   : $FTP_SERVER_DIR"
+
+          sudo apt-get update -qq && sudo apt-get install -y -qq lftp
+          
+          # Konfigurasi lftp:
+          # - ssl-allow no: hindari enkripsi TLS kontrol channel agar router/firewall NAT hosting dapat melacak dan membuka port pasif otomatis
+          # - use-pret no: nonaktifkan PRET yang bermasalah pada Pure-FTPd
+          # - prefer-epsv no: paksa negosiasi PASV IPv4 standar
+          # - parallel 2: membatasi max simultaneous data connection agar aman dari rate-limit cPanel
+          lftp -d <<EOF
+          set ssl:verify-certificate no
+          set ftp:ssl-allow no
+          set ftp:passive-mode true
+          set ftp:use-pret no
+          set ftp:prefer-epsv no
+          set net:max-retries 2
+          set net:timeout 30
+          open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
+          mirror --reverse --delete --parallel=2 --verbose ./deploy/ "$FTP_SERVER_DIR"
+          bye
+          EOF
+
+      - name: 🔔 Deploy Summary
+        if: always()
+        run: |
+          echo "### 🚀 Deployment Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Startup File Target:** \`.next/standalone/server.js\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Passenger Auto-restart:** \`tmp/restart.txt\` updated" >> $GITHUB_STEP_SUMMARY
