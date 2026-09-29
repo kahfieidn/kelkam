@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    name: Build & Deploy via FTP (tar.gz + Full Sync)
+    name: Build & Deploy via FTP (Direct Mirror)
     runs-on: ubuntu-latest
     environment: FTP_SERVER
 
@@ -66,86 +66,65 @@ jobs:
           AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
         run: npm run build
 
-      - name: 📁 Prepare Deployment Package (tar.gz)
+      - name: 📁 Prepare Deploy Folder
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 Menyiapkan paket deploy (compress → upload → extract)"
+          echo "📦 Menyiapkan folder deploy lokal (siap di-mirror ke FTP)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          rm -rf deploy deploy-package
+          rm -rf deploy
           mkdir -p deploy/.next/standalone/.next
           mkdir -p deploy/tmp
 
-          # 1. Salin seluruh isi .next/standalone ke struktur deploy
           echo "→ Menyalin .next/standalone..."
           cp -r .next/standalone/. deploy/.next/standalone/
 
-          # 2. Salin .next/static ke .next/standalone/.next/static (wajib untuk standalone)
           echo "→ Menyalin .next/static..."
           cp -r .next/static deploy/.next/standalone/.next/
 
-          # 3. Salin folder public ke .next/standalone/public (wajib untuk standalone)
           echo "→ Menyalin public/..."
           cp -r public deploy/.next/standalone/
 
-          # 4. Touch tmp/restart.txt agar Phusion Passenger restart otomatis
+          # Touch tmp/restart.txt agar Phusion Passenger restart saat file ini diperbarui
           touch deploy/tmp/restart.txt
 
-          # 5. Salin folder prisma untuk runtime schema
           if [ -d "prisma" ]; then
             echo "→ Menyalin prisma/..."
             cp -r prisma deploy/
           fi
 
-          # 6. Buat file root server.js sebagai startup loader cPanel
-          cat << 'EOF' > deploy/server.js
-          // Startup file jika cPanel Application Startup File diset ke server.js
-          require('./.next/standalone/server.js');
-          EOF
+          # Buat server.js startup loader untuk cPanel
+          printf '// Startup file: cPanel Node.js App Startup File = server.js\nrequire("./.next/standalone/server.js");\n' > deploy/server.js
 
-          # 7. Generate file .env untuk runtime production
-          cat << EOF > deploy/.env
-          NODE_ENV=production
-          PORT=3000
-          HOSTNAME=0.0.0.0
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
-          DIRECT_URL=${{ secrets.DIRECT_URL }}
-          AUTH_JWT_SECRET=${{ secrets.AUTH_JWT_SECRET }}
-          NEXT_PUBLIC_SITE_URL=${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
-          AI_API_KEY=${{ secrets.AI_API_KEY }}
-          AI_BASE_URL=${{ secrets.AI_BASE_URL }}
-          AI_MODEL=${{ secrets.AI_MODEL }}
-          AI_MODEL_FAST=${{ secrets.AI_MODEL_FAST }}
-          AI_MODEL_REVIEW=${{ secrets.AI_MODEL_REVIEW }}
-          EOF
-
-          # 8. Buat manifest daftar SEMUA file yang ada di paket deploy
-          #    File ini dipakai oleh server untuk menghapus file lama yang sudah tidak ada
-          echo "→ Membuat deploy-manifest.txt..."
-          find deploy -type f | sed 's|^deploy/||' | sort > deploy/deploy-manifest.txt
-          echo "  Total file: $(wc -l < deploy/deploy-manifest.txt)"
-
-          # 9. Kompres seluruh isi deploy menjadi 1 file archive
-          echo "→ Mengompresi menjadi deploy.tar.gz..."
-          tar -czf deploy.tar.gz -C deploy .
-          echo "  Ukuran archive: $(du -sh deploy.tar.gz | cut -f1)"
-
-          # 10. Siapkan paket upload: archive + extractor PHP + .htaccess folder deploy
-          mkdir -p deploy-package
-          mv deploy.tar.gz deploy-package/
-          cp public/deploy-extract.php deploy-package/
-          # Upload .htaccess ke folder deploy agar PHP bisa dieksekusi (PassengerEnabled off)
-          cp public/.htaccess deploy-package/
-
-          # Inject token rahasia ke dalam script ekstraktor
-          DEPLOY_TOKEN="${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}"
-          sed -i "s/DEPLOY_TOKEN_PLACEHOLDER/${DEPLOY_TOKEN}/" deploy-package/deploy-extract.php
+          # Generate .env runtime production
+          printf 'NODE_ENV=production\nPORT=3000\nHOSTNAME=0.0.0.0\n' > deploy/.env
+          printf 'DATABASE_URL=%s\n' "$DATABASE_URL_VAL" >> deploy/.env
+          printf 'DIRECT_URL=%s\n' "$DIRECT_URL_VAL" >> deploy/.env
+          printf 'AUTH_JWT_SECRET=%s\n' "$AUTH_JWT_SECRET_VAL" >> deploy/.env
+          printf 'NEXT_PUBLIC_SITE_URL=%s\n' "$SITE_URL_VAL" >> deploy/.env
+          printf 'AI_API_KEY=%s\n' "$AI_API_KEY_VAL" >> deploy/.env
+          printf 'AI_BASE_URL=%s\n' "$AI_BASE_URL_VAL" >> deploy/.env
+          printf 'AI_MODEL=%s\n' "$AI_MODEL_VAL" >> deploy/.env
+          printf 'AI_MODEL_FAST=%s\n' "$AI_MODEL_FAST_VAL" >> deploy/.env
+          printf 'AI_MODEL_REVIEW=%s\n' "$AI_MODEL_REVIEW_VAL" >> deploy/.env
 
           echo ""
-          echo "✅ Isi paket yang akan di-upload:"
-          ls -lh deploy-package/
+          echo "✅ Folder deploy siap:"
+          find deploy -maxdepth 2 -type d | head -20
+          echo "Total file : $(find deploy -type f | wc -l)"
+          echo "Total size : $(du -sh deploy | cut -f1)"
+        env:
+          DATABASE_URL_VAL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL_VAL: ${{ secrets.DIRECT_URL }}
+          AUTH_JWT_SECRET_VAL: ${{ secrets.AUTH_JWT_SECRET }}
+          SITE_URL_VAL: ${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
+          AI_API_KEY_VAL: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL_VAL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL_VAL: ${{ secrets.AI_MODEL }}
+          AI_MODEL_FAST_VAL: ${{ secrets.AI_MODEL_FAST }}
+          AI_MODEL_REVIEW_VAL: ${{ secrets.AI_MODEL_REVIEW }}
 
-      - name: 📤 Upload Package via FTP
+      - name: 📤 Upload via FTP (lftp mirror --delete)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER || secrets.CPANEL_HOST || secrets.FTP_HOST || vars.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME || secrets.CPANEL_USER || secrets.FTP_USER || vars.FTP_USERNAME }}
@@ -154,19 +133,17 @@ jobs:
         run: |
           if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
             echo "::error::Kredensial FTP belum diset di GitHub Secrets!"
-            echo "  Pastikan secret berikut ada: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD"
             exit 1
           fi
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📤 Mengunggah ke FTP..."
+          echo "📤 Upload ke FTP dengan mirror --delete (sync penuh)..."
           echo "   Server : $FTP_SERVER"
           echo "   Folder : $FTP_SERVER_DIR"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
 
-          # Tulis script lftp ke file — pakai printf agar tidak konflik dengan YAML
           printf '%s\n' \
             "set ssl:verify-certificate no" \
             "set ftp:ssl-allow no" \
@@ -178,62 +155,19 @@ jobs:
             "set net:reconnect-interval-base 5" \
             "set net:reconnect-interval-multiplier 1" \
             "open -u \"${FTP_USERNAME}\",\"${FTP_PASSWORD}\" \"${FTP_SERVER}\"" \
-            "mirror --reverse --verbose --no-perms --no-umask ./deploy-package/ \"${FTP_SERVER_DIR}\"" \
+            "mirror --reverse --delete --verbose --no-perms --no-umask --exclude-glob=.git/ --exclude-glob=node_modules/ ./deploy/ \"${FTP_SERVER_DIR}\"" \
             "bye" \
             > /tmp/lftp_deploy.sh
 
-          echo "Script lftp yang akan dijalankan:"
+          echo "Script lftp:"
           cat /tmp/lftp_deploy.sh
           echo ""
 
           lftp -f /tmp/lftp_deploy.sh
-          echo "✅ Upload selesai!"
-
-      - name: ⚡ Trigger Extract & Restart Server
-        env:
-          SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
-          DEPLOY_TOKEN: ${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}
-          # FTP_SUBDIR = subfolder di URL antara domain dan deploy-extract.php
-          # Contoh: jika app ada di /home/user/public_html/cicd_pipeline_kampus/
-          # maka FTP_SUBDIR = cicd_pipeline_kampus
-          # Kosongkan jika deploy-extract.php ada di root domain langsung.
-          FTP_SUBDIR: ${{ secrets.FTP_SUBDIR || vars.FTP_SUBDIR || 'cicd_pipeline_kampus' }}
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "⚡ Memicu ekstraksi otomatis di server cPanel..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-          # Bangun URL dengan benar: hapus trailing slash dari SITE_URL
-          # lalu tambahkan subfolder (jika ada) dan nama file
-          BASE_URL="${SITE_URL%/}"
-          if [ -n "$FTP_SUBDIR" ]; then
-            EXTRACT_URL="${BASE_URL}/${FTP_SUBDIR}/deploy-extract.php?token=${DEPLOY_TOKEN}"
-          else
-            EXTRACT_URL="${BASE_URL}/deploy-extract.php?token=${DEPLOY_TOKEN}"
-          fi
-
-          echo "→ Memanggil: ${BASE_URL}/${FTP_SUBDIR}/deploy-extract.php"
-          HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
-            --max-time 300 \
-            --retry 2 \
-            --retry-delay 10 \
-            --insecure \
-            "$EXTRACT_URL" || true)
-
           echo ""
-          echo "HTTP Status : $HTTP_CODE"
-          echo "Respon      :"
-          cat /tmp/resp.json 2>/dev/null | python3 -m json.tool 2>/dev/null || cat /tmp/resp.json 2>/dev/null || true
-          echo ""
-
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Ekstraksi gagal dengan HTTP $HTTP_CODE."
-            echo "::error::URL yang dipanggil: $EXTRACT_URL"
-            echo "::error::Pastikan FTP_SUBDIR sudah benar di GitHub Secrets/Variables."
-            exit 1
-          fi
-
-          echo "✅ Deploy berhasil! Phusion Passenger sudah di-restart."
+          echo "✅ Upload & full sync selesai!"
+          echo "   File yang dihapus dari repo → otomatis terhapus dari server (flag --delete)"
+          echo "   Phusion Passenger restart → tmp/restart.txt sudah diperbarui"
 
       - name: 🔔 Deploy Summary
         if: always()
@@ -245,7 +179,7 @@ jobs:
           echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Method** | FTP upload tar.gz → server extract |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Method** | FTP direct mirror + --delete |" >> $GITHUB_STEP_SUMMARY
           echo "| **Startup File** | \`.next/standalone/server.js\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Passenger Restart** | \`tmp/restart.txt\` updated |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Full Sync** | \`deploy-manifest.txt\` (hapus file lama) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Passenger Restart** | \`tmp/restart.txt\` updated via FTP |" >> $GITHUB_STEP_SUMMARY
+          echo "| **File Deletions** | Handled by lftp \`--delete\` flag |" >> $GITHUB_STEP_SUMMARY
