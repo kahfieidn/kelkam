@@ -145,22 +145,8 @@ jobs:
           # - Hapus flag '-d' agar tidak membanjiri log dengan raw FTP debug
           # - net:timeout 60: beri waktu cukup untuk file binary besar (.prisma/client)
           # - format output dengan emoji: ✅ Upload, 🗑️ Hapus, 📁 Folder
-          set -o pipefail
-          lftp <<EOF 2>&1 | while IFS= read -r line; do
-            if [[ "$line" =~ Transferring\ file\ [\'\`]?(.*)[\'\`]? ]]; then
-              echo "  ✅ Upload : ${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ Removing\ old\ file\ [\'\`]?(.*)[\'\`]? ]]; then
-              echo "  🗑️ Hapus  : ${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ Making\ directory\ [\'\`]?(.*)[\'\`]? ]]; then
-              echo "  📁 Folder : ${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ (Fatal|error|Error|Timeout|failed) ]]; then
-              echo "  ⚠️ $line"
-            elif [[ "$line" =~ bytes\ per\ second|Transferring|Removing ]]; then
-              : # abaikan baris statistik detail
-            else
-              echo "  ℹ️ $line"
-            fi
-          done
+          # 1. Tulis konfigurasi & perintah lftp ke file sementara
+          cat << EOF > /tmp/lftp_script.txt
           set ssl:verify-certificate no
           set ftp:ssl-allow no
           set ftp:passive-mode true
@@ -174,7 +160,33 @@ jobs:
           open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
           mirror --reverse --delete --verbose=1 ./deploy/ "$FTP_SERVER_DIR"
           bye
-          EOF
+EOF
+
+          # 2. Jalankan lftp dan rapikan log menggunakan Python
+          set -o pipefail
+          lftp -f /tmp/lftp_script.txt 2>&1 | python3 -u -c '
+import sys, re
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    if line.startswith("Transferring file "):
+        path = re.sub(r"^Transferring file [\x27\x60]?(.*?)[\x27\x60]?$", r"\1", line)
+        print(f"  ✅ Upload : {path}", flush=True)
+    elif line.startswith("Removing old file "):
+        path = re.sub(r"^Removing old file [\x27\x60]?(.*?)[\x27\x60]?$", r"\1", line)
+        print(f"  🗑️ Hapus  : {path}", flush=True)
+    elif line.startswith("Making directory "):
+        path = re.sub(r"^Making directory [\x27\x60]?(.*?)[\x27\x60]?$", r"\1", line)
+        print(f"  📁 Folder : {path}", flush=True)
+    elif any(err in line for err in ["Fatal", "error", "Error", "Timeout", "failed"]):
+        print(f"  ⚠️ {line}", flush=True)
+    elif "bytes per second" in line or "measured here" in line:
+        pass
+    else:
+        print(f"  ℹ️ {line}", flush=True)
+'
 
       - name: 🔔 Deploy Summary
         if: always()
