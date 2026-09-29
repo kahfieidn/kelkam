@@ -153,6 +153,8 @@ jobs:
             "set net:timeout 120" \
             "set net:reconnect-interval-base 5" \
             "set net:reconnect-interval-multiplier 1" \
+            "set mirror:parallel-transfer-count 10" \
+            "set mirror:use-pget-n 5" \
             "open -u \"${FTP_USERNAME}\",\"${FTP_PASSWORD}\" \"${FTP_SERVER}\"" \
             "mirror --reverse --delete --verbose --no-perms --no-umask --exclude-glob=.git/ ./deploy/ \"${FTP_SERVER_DIR}\"" \
             "bye" \
