@@ -11,8 +11,9 @@
 
 RewriteEngine On
 
-# Skip cgi-bin (default cPanel system path, biar ga ganggu)
+# Skip cgi-bin & deploy-extract.php (biar langsung diproses PHP tanpa di-rewrite)
 RewriteRule ^cgi-bin/ - [L]
+RewriteRule ^deploy-extract\.php$ - [L]
 
 # Internal rewrite: /foo -> /keluhkampus.my.id/foo
 # (Apache ngerjakan rewrite di server side; browser cuma liat URL asli)
