@@ -164,21 +164,27 @@ jobs:
 
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
 
-          lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER" << 'LFTP_EOF'
-          set ssl:verify-certificate no
-          set ftp:ssl-allow no
-          set ftp:passive-mode true
-          set ftp:use-pret no
-          set ftp:prefer-epsv no
-          set net:max-retries 5
-          set net:timeout 120
-          set net:reconnect-interval-base 5
-          set net:reconnect-interval-multiplier 1
-          mirror --reverse --verbose --no-perms --no-umask \
-            ./deploy-package/ "$FTP_SERVER_DIR"
-          bye
-          LFTP_EOF
+          # Tulis script lftp ke file terpisah agar variabel shell ter-expand dengan benar
+          cat > /tmp/lftp_deploy.sh << EOF
+set ssl:verify-certificate no
+set ftp:ssl-allow no
+set ftp:passive-mode true
+set ftp:use-pret no
+set ftp:prefer-epsv no
+set net:max-retries 5
+set net:timeout 120
+set net:reconnect-interval-base 5
+set net:reconnect-interval-multiplier 1
+open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
+mirror --reverse --verbose --no-perms --no-umask ./deploy-package/ "$FTP_SERVER_DIR"
+bye
+EOF
 
+          echo "Script lftp yang akan dijalankan:"
+          cat /tmp/lftp_deploy.sh
+          echo ""
+
+          lftp -f /tmp/lftp_deploy.sh
           echo "✅ Upload selesai!"
 
       - name: ⚡ Trigger Extract & Restart Server
