@@ -154,7 +154,7 @@ jobs:
             "set net:reconnect-interval-base 5" \
             "set net:reconnect-interval-multiplier 1" \
             "open -u \"${FTP_USERNAME}\",\"${FTP_PASSWORD}\" \"${FTP_SERVER}\"" \
-            "mirror --reverse --delete --verbose --no-perms --no-umask --exclude-glob=.git/ --exclude-glob=node_modules/ ./deploy/ \"${FTP_SERVER_DIR}\"" \
+            "mirror --reverse --delete --verbose --no-perms --no-umask --exclude-glob=.git/ ./deploy/ \"${FTP_SERVER_DIR}\"" \
             "bye" \
             > /tmp/lftp_deploy.sh
 
