@@ -62,6 +62,14 @@ function main() {
   run("npm run build");
 
   step("Copy bundle ke deploy/");
+  // 1. Copy static & public ke dalam standalone (standar resmi Next.js)
+  copy(".next/static", ".next/standalone/.next/static");
+  copy("public", ".next/standalone/public");
+
+  // 2. Simpan struktur .next/standalone/ (agar start point .next/standalone/server.js bekerja)
+  copy(".next/standalone", ".next/standalone");
+
+  // 3. Fallback jika startup file di cPanel diset ke server.js di root
   copy(".next/standalone", ".");
   copy(".next/static", ".next/static");
   copy("public", "public");
