@@ -9,6 +9,11 @@
 # server.js strip prefix "/keluhkampus.my.id" sebelum pass ke Next.js.
 # ============================================================================
 
+# Matikan Phusion Passenger untuk script ekstraktor agar diproses murni oleh PHP
+<Files "deploy-extract.php">
+    PassengerEnabled off
+</Files>
+
 RewriteEngine On
 
 # Skip cgi-bin & deploy-extract.php (biar langsung diproses PHP tanpa di-rewrite)

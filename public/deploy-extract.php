@@ -68,9 +68,15 @@ if (!$archive_path) {
 
 $start_time = microtime(true);
 $extracted = false;
-$method = 'none';
+// 3. Bersihkan folder .next lama sebelum ekstrak agar file yang dihapus di proyek ikut bersih
+$old_next = $target_dir . '/.next';
+if (is_dir($old_next)) {
+    if (function_exists('exec')) {
+        @exec('rm -rf ' . escapeshellarg($old_next));
+    }
+}
 
-// 3. Ekstrak archive menggunakan perintah sistem tar (Paling cepat di Linux)
+// 4. Ekstrak archive menggunakan perintah sistem tar (Paling cepat di Linux)
 if (function_exists('exec')) {
     $cmd = 'tar -xzf ' . escapeshellarg($archive_path) . ' -C ' . escapeshellarg($target_dir) . ' 2>&1';
     $output = [];

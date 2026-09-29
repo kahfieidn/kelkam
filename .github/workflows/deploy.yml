@@ -64,10 +64,10 @@ jobs:
           AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
         run: npm run build
 
-      - name: 📁 Prepare Deployment Directory
+      - name: 📁 Prepare Deployment Directory & Archive
         run: |
           echo "Menyiapkan direktori deploy..."
-          rm -rf deploy
+          rm -rf deploy deploy-package
           mkdir -p deploy/.next/standalone/.next
           mkdir -p deploy/tmp
 
@@ -110,12 +110,26 @@ jobs:
           AI_MODEL_REVIEW=${{ secrets.AI_MODEL_REVIEW }}
           EOF
 
-          echo "Pemeriksaan direktori deploy:"
-          ls -la deploy
-          echo "Pemeriksaan direktori .next di dalam deploy:"
-          ls -la deploy/.next/standalone/.next
+          # 8. Kompres seluruh isi deploy menjadi 1 file archive tunggal
+          echo "Mengompresi folder deploy menjadi deploy.tar.gz..."
+          tar -czf deploy.tar.gz -C deploy $(ls -A deploy)
+          echo "Ukuran archive:"
+          ls -lh deploy.tar.gz
 
-      - name: 📤 Deploy via FTP (Fast Mirror & Auto-Sync)
+          # 9. Siapkan paket upload (HANYA berisi archive, .htaccess baru, dan script ekstraktor)
+          mkdir -p deploy-package
+          mv deploy.tar.gz deploy-package/
+          cp public/deploy-extract.php deploy-package/
+          cp public/.htaccess deploy-package/
+
+          # Inject token rahasia ke dalam script ekstraktor
+          DEPLOY_TOKEN="${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}"
+          sed -i "s/DEPLOY_TOKEN_PLACEHOLDER/${DEPLOY_TOKEN}/" deploy-package/deploy-extract.php
+
+          echo "Isi paket yang akan di-upload ke server (sangat ringan):"
+          ls -la deploy-package
+
+      - name: 📤 Upload Archive via FTP (Super Cepat)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER || secrets.CPANEL_HOST || secrets.FTP_HOST || vars.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME || secrets.CPANEL_USER || secrets.FTP_USER || vars.FTP_USERNAME }}
@@ -132,39 +146,52 @@ jobs:
 
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
 
-          # 1. Konfigurasi lftp berkecepatan tinggi:
-          # - parallel 3: upload 3 file sekaligus (jauh lebih cepat)
-          # - delete: OTOMATIS HAPUS file lama/usang di cPanel agar sinkronisasi bersih & disk hemat
-          # - only-newer: hanya upload file baru/berubah (deploy selanjutnya super cepat)
-          # - use-mfmt no & use-site-utime no: hilangkan overhead roundtrip timestamp per file
           {
             echo "set ssl:verify-certificate no"
             echo "set ftp:ssl-allow no"
             echo "set ftp:passive-mode true"
             echo "set ftp:use-pret no"
             echo "set ftp:prefer-epsv no"
-            echo "set ftp:use-site-utime no"
-            echo "set ftp:use-mfmt no"
-            echo "set net:connection-limit 4"
-            echo "set net:max-retries 4"
+            echo "set net:max-retries 3"
             echo "set net:timeout 60"
-            echo "set net:reconnect-interval-base 3"
             echo "open -u \"$FTP_USERNAME\",\"$FTP_PASSWORD\" \"$FTP_SERVER\""
-            echo "mirror --reverse --delete --only-newer --parallel=3 --verbose=1 ./deploy/ \"$FTP_SERVER_DIR\""
+            echo "mirror --reverse ./deploy-package/ \"$FTP_SERVER_DIR\""
             echo "bye"
           } > /tmp/lftp_script.txt
 
-          # 2. Jalankan lftp dengan log bersih & informatif
-          set -o pipefail
-          lftp -f /tmp/lftp_script.txt 2>&1 \
-            | sed -E \
-                -e "s/^Transferring file '(.*)'$/  ✅ Upload : \1/" \
-                -e "s/^Removing old file '(.*)'$/  🗑️ Hapus  : \1/" \
-                -e "s/^Making directory '(.*)'$/  📁 Folder : \1/" \
-                -e "/bytes per second/d" \
-                -e "/measured here/d" \
-                -e "/File successfully transferred/d"
-          echo "✅ Deploy selesai! Phusion Passenger akan otomatis me-restart server via tmp/restart.txt."
+          echo "Mengunggah archive dan script ekstraktor..."
+          lftp -f /tmp/lftp_script.txt
+          echo "✅ Upload archive selesai!"
+
+      - name: ⚡ Ekstrak Archive & Restart Server
+        env:
+          SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
+          DEPLOY_TOKEN: ${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}
+        run: |
+          echo "Memicu ekstraksi otomatis di server cPanel..."
+          
+          EXTRACT_URL="${SITE_URL}/deploy-extract.php?token=${DEPLOY_TOKEN}"
+          FALLBACK_URL="${SITE_URL}/keluhkampus.my.id/deploy-extract.php?token=${DEPLOY_TOKEN}"
+
+          echo "Memanggil: ${SITE_URL}/deploy-extract.php ..."
+          HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -m 180 "$EXTRACT_URL" || true)
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "URL utama mengembalikan HTTP $HTTP_CODE, mencoba fallback URL..."
+            HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -m 180 "$FALLBACK_URL" || true)
+          fi
+
+          echo "HTTP Status Code: $HTTP_CODE"
+          echo "Respon Server:"
+          cat /tmp/resp.json 2>/dev/null || true
+          echo ""
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Ekstraksi gagal dengan status HTTP $HTTP_CODE. Cek log respons server di atas."
+            exit 1
+          fi
+
+          echo "✅ Ekstraksi paket berhasil dan Phusion Passenger telah di-restart!"
 
       - name: 🔔 Deploy Summary
         if: always()
