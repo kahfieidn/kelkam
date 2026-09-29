@@ -130,21 +130,23 @@ jobs:
 
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
           
-          # Konfigurasi lftp:
-          # - ssl-allow no: hindari enkripsi TLS kontrol channel agar router/firewall NAT hosting dapat melacak dan membuka port pasif otomatis
-          # - use-pret no: nonaktifkan PRET yang bermasalah pada Pure-FTPd
-          # - prefer-epsv no: paksa negosiasi PASV IPv4 standar
-          # - parallel 2: membatasi max simultaneous data connection agar aman dari rate-limit cPanel
+          # Konfigurasi lftp anti-firewall ban:
+          # - connection-limit 1: hanya 1 koneksi aktif dalam satu waktu (mencegah CSF CT_LIMIT ban)
+          # - sync-mode on: tunggu respons sebelum kirim perintah berikutnya (mencegah CSF PORTFLOOD)
+          # - ssl-allow no: plain FTP agar passthrough NAT firewall lancar
+          # - mirror tanpa parallel: upload sekuensial agar tidak memicu deteksi serangan port-scan
           lftp -d <<EOF
           set ssl:verify-certificate no
           set ftp:ssl-allow no
           set ftp:passive-mode true
           set ftp:use-pret no
           set ftp:prefer-epsv no
-          set net:max-retries 2
+          set ftp:sync-mode on
+          set net:connection-limit 1
+          set net:max-retries 3
           set net:timeout 30
           open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
-          mirror --reverse --delete --parallel=2 --verbose ./deploy/ "$FTP_SERVER_DIR"
+          mirror --reverse --delete --verbose ./deploy/ "$FTP_SERVER_DIR"
           bye
           EOF
 
