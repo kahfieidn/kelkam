@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: # Memungkinkan trigger manual dari tab Actions di GitHub
+  workflow_dispatch: # Memungkinan trigger manual dari tab Actions di GitHub
 
 jobs:
   deploy:
