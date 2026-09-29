@@ -12,13 +12,15 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    name: Build & Deploy via FTP
+    name: Build & Deploy via FTP (tar.gz + Full Sync)
     runs-on: ubuntu-latest
     environment: FTP_SERVER
 
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 🌐 Ambil Info IP Runner GitHub
         run: |
@@ -64,27 +66,34 @@ jobs:
           AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
         run: npm run build
 
-      - name: 📁 Prepare Deployment Directory & Archive
+      - name: 📁 Prepare Deployment Package (tar.gz)
         run: |
-          echo "Menyiapkan direktori deploy..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Menyiapkan paket deploy (compress → upload → extract)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           rm -rf deploy deploy-package
           mkdir -p deploy/.next/standalone/.next
           mkdir -p deploy/tmp
 
-          # 1. Salin seluruh isi .next/standalone ke struktur deploy/.next/standalone
+          # 1. Salin seluruh isi .next/standalone ke struktur deploy
+          echo "→ Menyalin .next/standalone..."
           cp -r .next/standalone/. deploy/.next/standalone/
 
-          # 2. Salin .next/static ke .next/standalone/.next/static (Wajib untuk Next.js standalone)
+          # 2. Salin .next/static ke .next/standalone/.next/static (wajib untuk standalone)
+          echo "→ Menyalin .next/static..."
           cp -r .next/static deploy/.next/standalone/.next/
 
-          # 3. Salin folder public ke .next/standalone/public (Wajib untuk Next.js standalone)
+          # 3. Salin folder public ke .next/standalone/public (wajib untuk standalone)
+          echo "→ Menyalin public/..."
           cp -r public deploy/.next/standalone/
 
-          # 4. Trigger auto-restart cPanel (Phusion Passenger me-restart app jika tmp/restart.txt diubah)
+          # 4. Touch tmp/restart.txt agar Phusion Passenger restart otomatis
           touch deploy/tmp/restart.txt
 
           # 5. Salin folder prisma untuk runtime schema
           if [ -d "prisma" ]; then
+            echo "→ Menyalin prisma/..."
             cp -r prisma deploy/
           fi
 
@@ -94,7 +103,7 @@ jobs:
           require('./.next/standalone/server.js');
           EOF
 
-          # 7. Generate file .env di server untuk runtime production
+          # 7. Generate file .env untuk runtime production
           cat << EOF > deploy/.env
           NODE_ENV=production
           PORT=3000
@@ -110,26 +119,31 @@ jobs:
           AI_MODEL_REVIEW=${{ secrets.AI_MODEL_REVIEW }}
           EOF
 
-          # 8. Kompres seluruh isi deploy menjadi 1 file archive tunggal
-          echo "Mengompresi folder deploy menjadi deploy.tar.gz..."
-          tar -czf deploy.tar.gz -C deploy $(ls -A deploy)
-          echo "Ukuran archive:"
-          ls -lh deploy.tar.gz
+          # 8. Buat manifest daftar SEMUA file yang ada di paket deploy
+          #    File ini dipakai oleh server untuk menghapus file lama yang sudah tidak ada
+          echo "→ Membuat deploy-manifest.txt..."
+          find deploy -type f | sed 's|^deploy/||' | sort > deploy/deploy-manifest.txt
+          echo "  Total file: $(wc -l < deploy/deploy-manifest.txt)"
 
-          # 9. Siapkan paket upload (HANYA berisi archive, .htaccess baru, dan script ekstraktor)
+          # 9. Kompres seluruh isi deploy menjadi 1 file archive
+          echo "→ Mengompresi menjadi deploy.tar.gz..."
+          tar -czf deploy.tar.gz -C deploy .
+          echo "  Ukuran archive: $(du -sh deploy.tar.gz | cut -f1)"
+
+          # 10. Siapkan paket upload: archive + extractor PHP
           mkdir -p deploy-package
           mv deploy.tar.gz deploy-package/
           cp public/deploy-extract.php deploy-package/
-          cp public/.htaccess deploy-package/
 
           # Inject token rahasia ke dalam script ekstraktor
           DEPLOY_TOKEN="${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}"
           sed -i "s/DEPLOY_TOKEN_PLACEHOLDER/${DEPLOY_TOKEN}/" deploy-package/deploy-extract.php
 
-          echo "Isi paket yang akan di-upload ke server (sangat ringan):"
-          ls -la deploy-package
+          echo ""
+          echo "✅ Isi paket yang akan di-upload:"
+          ls -lh deploy-package/
 
-      - name: 📤 Upload Archive via FTP (Super Cepat)
+      - name: 📤 Upload Package via FTP
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER || secrets.CPANEL_HOST || secrets.FTP_HOST || vars.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME || secrets.CPANEL_USER || secrets.FTP_USER || vars.FTP_USERNAME }}
@@ -137,67 +151,79 @@ jobs:
           FTP_SERVER_DIR: ${{ secrets.FTP_SERVER_DIR || vars.FTP_SERVER_DIR || '/' }}
         run: |
           if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
-            echo "::error::Kredensial FTP belum lengkap di GitHub Secrets!"
+            echo "::error::Kredensial FTP belum diset di GitHub Secrets!"
+            echo "  Pastikan secret berikut ada: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD"
             exit 1
           fi
 
-          echo "Target Server : $FTP_SERVER"
-          echo "Target Folder : $FTP_SERVER_DIR"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📤 Mengunggah ke FTP..."
+          echo "   Server : $FTP_SERVER"
+          echo "   Folder : $FTP_SERVER_DIR"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
 
-          {
-            echo "set ssl:verify-certificate no"
-            echo "set ftp:ssl-allow no"
-            echo "set ftp:passive-mode true"
-            echo "set ftp:use-pret no"
-            echo "set ftp:prefer-epsv no"
-            echo "set net:max-retries 3"
-            echo "set net:timeout 60"
-            echo "open -u \"$FTP_USERNAME\",\"$FTP_PASSWORD\" \"$FTP_SERVER\""
-            echo "mirror --reverse ./deploy-package/ \"$FTP_SERVER_DIR\""
-            echo "bye"
-          } > /tmp/lftp_script.txt
+          lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER" << 'LFTP_EOF'
+          set ssl:verify-certificate no
+          set ftp:ssl-allow no
+          set ftp:passive-mode true
+          set ftp:use-pret no
+          set ftp:prefer-epsv no
+          set net:max-retries 5
+          set net:timeout 120
+          set net:reconnect-interval-base 5
+          set net:reconnect-interval-multiplier 1
+          mirror --reverse --verbose --no-perms --no-umask \
+            ./deploy-package/ "$FTP_SERVER_DIR"
+          bye
+          LFTP_EOF
 
-          echo "Mengunggah archive dan script ekstraktor..."
-          lftp -f /tmp/lftp_script.txt
-          echo "✅ Upload archive selesai!"
+          echo "✅ Upload selesai!"
 
-      - name: ⚡ Ekstrak Archive & Restart Server
+      - name: ⚡ Trigger Extract & Restart Server
         env:
           SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
           DEPLOY_TOKEN: ${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}
         run: |
-          echo "Memicu ekstraksi otomatis di server cPanel..."
-          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⚡ Memicu ekstraksi otomatis di server cPanel..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           EXTRACT_URL="${SITE_URL}/deploy-extract.php?token=${DEPLOY_TOKEN}"
-          FALLBACK_URL="${SITE_URL}/keluhkampus.my.id/deploy-extract.php?token=${DEPLOY_TOKEN}"
 
-          echo "Memanggil: ${SITE_URL}/deploy-extract.php ..."
-          HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -m 180 "$EXTRACT_URL" || true)
-          
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "URL utama mengembalikan HTTP $HTTP_CODE, mencoba fallback URL..."
-            HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -m 180 "$FALLBACK_URL" || true)
-          fi
+          echo "→ Memanggil: $EXTRACT_URL"
+          HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+            --max-time 300 \
+            --retry 2 \
+            --retry-delay 10 \
+            "$EXTRACT_URL" || true)
 
-          echo "HTTP Status Code: $HTTP_CODE"
-          echo "Respon Server:"
-          cat /tmp/resp.json 2>/dev/null || true
+          echo ""
+          echo "HTTP Status : $HTTP_CODE"
+          echo "Respon      :"
+          cat /tmp/resp.json 2>/dev/null | python3 -m json.tool 2>/dev/null || cat /tmp/resp.json 2>/dev/null || true
           echo ""
 
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Ekstraksi gagal dengan status HTTP $HTTP_CODE. Cek log respons server di atas."
+            echo "::error::Ekstraksi gagal dengan HTTP $HTTP_CODE."
+            echo "::error::Pastikan deploy-extract.php sudah ter-upload & token sudah benar."
             exit 1
           fi
 
-          echo "✅ Ekstraksi paket berhasil dan Phusion Passenger telah di-restart!"
+          echo "✅ Deploy berhasil! Phusion Passenger sudah di-restart."
 
       - name: 🔔 Deploy Summary
         if: always()
         run: |
           echo "### 🚀 Deployment Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Startup File Target:** \`.next/standalone/server.js\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Passenger Auto-restart:** \`tmp/restart.txt\` updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Method** | FTP upload tar.gz → server extract |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Startup File** | \`.next/standalone/server.js\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Passenger Restart** | \`tmp/restart.txt\` updated |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Sync** | \`deploy-manifest.txt\` (hapus file lama) |" >> $GITHUB_STEP_SUMMARY
