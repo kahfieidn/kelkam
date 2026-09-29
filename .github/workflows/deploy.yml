@@ -132,19 +132,21 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp
           
           # Konfigurasi lftp:
-          # - mode debug (-d): menampilkan respons kode FTP lengkap (230, 331, 530 dll)
-          # - ssl-protect-data false: mencegah hang pada passive data channel cPanel
-          # - ssl-force false: fleksibel jika server cPanel menggunakan FTP biasa atau FTPS
+          # - mode debug (-d): menampilkan respons kode FTP lengkap
+          # - ssl-allow no: hindari enkripsi TLS pada channel kontrol agar firewall/NAT hosting dapat melacak dan membuka passive port (port 51045 dll)
+          # - use-pret no: matikan perintah PRET yang menyebabkan anomali pada Pure-FTPd cPanel
+          # - prefer-epsv no: gunakan PASV standar (IPv4)
+          # - parallel 2: kurangi concurrent socket agar tidak terkena limit "Max connections per IP" Pure-FTPd
           lftp -d <<EOF
           set ssl:verify-certificate no
-          set ftp:ssl-allow yes
-          set ftp:ssl-force false
-          set ftp:ssl-protect-data false
+          set ftp:ssl-allow no
           set ftp:passive-mode true
+          set ftp:use-pret no
+          set ftp:prefer-epsv no
           set net:max-retries 2
-          set net:timeout 25
+          set net:timeout 30
           open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
-          mirror --reverse --delete --parallel=4 --verbose ./deploy/ "$FTP_SERVER_DIR"
+          mirror --reverse --delete --parallel=2 --verbose ./deploy/ "$FTP_SERVER_DIR"
           bye
           EOF
 
