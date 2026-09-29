@@ -130,10 +130,12 @@ jobs:
           tar -czf deploy.tar.gz -C deploy .
           echo "  Ukuran archive: $(du -sh deploy.tar.gz | cut -f1)"
 
-          # 10. Siapkan paket upload: archive + extractor PHP
+          # 10. Siapkan paket upload: archive + extractor PHP + .htaccess folder deploy
           mkdir -p deploy-package
           mv deploy.tar.gz deploy-package/
           cp public/deploy-extract.php deploy-package/
+          # Upload .htaccess ke folder deploy agar PHP bisa dieksekusi (PassengerEnabled off)
+          cp public/.htaccess deploy-package/
 
           # Inject token rahasia ke dalam script ekstraktor
           DEPLOY_TOKEN="${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}"
@@ -191,18 +193,31 @@ jobs:
         env:
           SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL || 'https://keluhkampus.my.id' }}
           DEPLOY_TOKEN: ${{ secrets.AUTH_JWT_SECRET || 'kelkam_deploy_secret' }}
+          # FTP_SUBDIR = subfolder di URL antara domain dan deploy-extract.php
+          # Contoh: jika app ada di /home/user/public_html/cicd_pipeline_kampus/
+          # maka FTP_SUBDIR = cicd_pipeline_kampus
+          # Kosongkan jika deploy-extract.php ada di root domain langsung.
+          FTP_SUBDIR: ${{ secrets.FTP_SUBDIR || vars.FTP_SUBDIR || 'cicd_pipeline_kampus' }}
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "⚡ Memicu ekstraksi otomatis di server cPanel..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          EXTRACT_URL="${SITE_URL}/deploy-extract.php?token=${DEPLOY_TOKEN}"
+          # Bangun URL dengan benar: hapus trailing slash dari SITE_URL
+          # lalu tambahkan subfolder (jika ada) dan nama file
+          BASE_URL="${SITE_URL%/}"
+          if [ -n "$FTP_SUBDIR" ]; then
+            EXTRACT_URL="${BASE_URL}/${FTP_SUBDIR}/deploy-extract.php?token=${DEPLOY_TOKEN}"
+          else
+            EXTRACT_URL="${BASE_URL}/deploy-extract.php?token=${DEPLOY_TOKEN}"
+          fi
 
-          echo "→ Memanggil: $EXTRACT_URL"
+          echo "→ Memanggil: ${BASE_URL}/${FTP_SUBDIR}/deploy-extract.php"
           HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
             --max-time 300 \
             --retry 2 \
             --retry-delay 10 \
+            --insecure \
             "$EXTRACT_URL" || true)
 
           echo ""
@@ -213,7 +228,8 @@ jobs:
 
           if [ "$HTTP_CODE" != "200" ]; then
             echo "::error::Ekstraksi gagal dengan HTTP $HTTP_CODE."
-            echo "::error::Pastikan deploy-extract.php sudah ter-upload & token sudah benar."
+            echo "::error::URL yang dipanggil: $EXTRACT_URL"
+            echo "::error::Pastikan FTP_SUBDIR sudah benar di GitHub Secrets/Variables."
             exit 1
           fi
 

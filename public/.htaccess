@@ -1,55 +1,28 @@
 # ============================================================================
-# keluhkampus.my.id — root .htaccess
-# -----------------------------------------------------------------------------
-# Passenger serve Next.js app di: /home/keluhkam/public_html/keluhkampus.my.id/
-# (Main Domain DocumentRoot = /public_html/, jd default-nya directory listing.)
-#
-# Fix: rewrite secara INTERNAL semua request dari "/" ke "/keluhkampus.my.id/"
-# Tanpa [R] flag = no client redirect = no redirect loop.
-# server.js strip prefix "/keluhkampus.my.id" sebelum pass ke Next.js.
+# cicd_pipeline_kampus/.htaccess
+# Folder khusus untuk CI/CD deployment via FTP + PHP extractor
+# JANGAN tambahkan RewriteRule ke keluhkampus.my.id di sini!
 # ============================================================================
 
-# Matikan Phusion Passenger untuk script ekstraktor agar diproses murni oleh PHP
-<Files "deploy-extract.php">
-    PassengerEnabled off
-</Files>
+# Matikan Phusion Passenger untuk folder ini — biar PHP murni yang handle
+PassengerEnabled off
 
-RewriteEngine On
-
-# Skip cgi-bin & deploy-extract.php (biar langsung diproses PHP tanpa di-rewrite)
-RewriteRule ^cgi-bin/ - [L]
-RewriteRule ^deploy-extract\.php$ - [L]
-
-# Internal rewrite: /foo -> /keluhkampus.my.id/foo
-# (Apache ngerjakan rewrite di server side; browser cuma liat URL asli)
-RewriteCond %{REQUEST_URI} !^/?keluhkampus\.my\.id/
-RewriteRule ^(.*)$ /keluhkampus.my.id/$1 [L]
-
-# Block akses ke file sensitif (anti kebocoran)
-<FilesMatch "^\.env|^\.env\.|package\.json|package-lock\.json|yarn\.lock|^\.git">
+# Izinkan akses HANYA ke deploy-extract.php, blokir semua file lain
+<FilesMatch "^(?!deploy-extract\.php$)">
     Require all denied
 </FilesMatch>
 
-# Block dotfiles (hidden files)
+# Izinkan deploy-extract.php diakses
+<Files "deploy-extract.php">
+    Require all granted
+</Files>
+
+# Matikan directory listing
+Options -Indexes
+
+# Block dotfiles
 <FilesMatch "^\.">
     Require all denied
 </FilesMatch>
-
-# Cache static assets 1 tahun (Next.js filename udah ada content-hash)
-<IfModule mod_expires.c>
-    ExpiresActive On
-    ExpiresByType application/javascript "access plus 1 year"
-    ExpiresByType text/css "access plus 1 year"
-    ExpiresByType image/png "access plus 1 year"
-    ExpiresByType image/svg+xml "access plus 1 year"
-    ExpiresByType image/webp "access plus 1 year"
-    ExpiresByType image/jpeg "access plus 1 year"
-    ExpiresByType font/woff2 "access plus 1 year"
-</IfModule>
-
-# Gzip compression
-<IfModule mod_deflate.c>
-    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css application/javascript application/json application/xml
-</IfModule>
 
 ServerSignature Off
