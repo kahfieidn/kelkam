@@ -1,5 +1,4 @@
-name: Deploy Next.js to cPanel
-
+name: Deploy Next.js to cPanel 2
 on:
   push:
     branches:
